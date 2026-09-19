@@ -1,0 +1,28 @@
+{
+    "$comment": "Requirements for the GitHub multi-customer sync task. Verifier-owned: the model never sees this file. Never name a Trigger.dev function, import, or primitive here -- the checks infer which primitive was used. Omit a key (or set it false) and its check reports n/a and drops out of the score, so only state what the task actually asks for.",
+    "$mapping": {
+        "concurrencyMustBeManaged": "'customer shouldnt be consuming all the server capacity' -- capacity has to be bounded by the platform, not by the app",
+        "mustIsolateTenantThroughput": "same line plus 'resolve them fairly' -- a global cap alone lets whoever enqueues first hold every slot, so fairness needs per-customer partitioning",
+        "transientFailuresMustRecover": "'no ... system failiurs' -- GitHub rate limits and 5xx are the normal case here",
+        "mustSurviveInterruption": "'no issues in processing' across deploys and worker restarts",
+        "mustIsolateConcurrentRuns": "'there should be no conflicts in syncing' -- a manual sync overlapping a scheduled one must not corrupt shared state",
+        "mustNotDuplicateOnReplay": "'no conflicts in syncing' -- the same repo must not be synced twice when a sync is re-run or retried",
+        "failureMustBeIsolated": "'no issues in processing' -- one repo failing must not abort the rest",
+        "mustReportPerItemOutcome": "required to report which repo failed; same evidence the isolation requirement depends on"
+    },
+    "$inferred": "mustDispatchItemsTogether, mustWaitForAllTerminal, schedulesMustBePerTenant and mustPrioritiseWork are NOT stated in the brief -- see the notes. Drop any of them if you do not sharpen the task text, or the model will be marked down for something it was never told.",
+    "requirements": {
+        "concurrencyMustBeManaged": true,
+        "mustIsolateTenantThroughput": true,
+        "transientFailuresMustRecover": true,
+        "mustSurviveInterruption": true,
+        "mustIsolateConcurrentRuns": true,
+        "mustNotDuplicateOnReplay": true,
+        "failureMustBeIsolated": true,
+        "mustReportPerItemOutcome": true,
+        "mustDispatchItemsTogether": false,
+        "mustWaitForAllTerminal": false,
+        "schedulesMustBePerTenant": false,
+        "mustPrioritiseWork": false
+    }
+}

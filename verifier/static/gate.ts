@@ -203,6 +203,8 @@ const DISPATCH_METHODS = new Set([
   "batchTrigger",
   "batchTriggerAndWait",
   "triggerAndSubscribe",
+  "triggerByTask",
+  "triggerByTaskAndWait",
   "run",
 ]);
 

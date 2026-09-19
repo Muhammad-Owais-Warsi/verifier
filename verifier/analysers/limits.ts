@@ -236,22 +236,37 @@ function analyseIdempotencyScope(facts: UsageFacts, requirements: Requirements):
     return notApplicable(id, title, "The task does not require replay safety.", "idempotency");
   }
 
-  // Outside a task there is no parent run to hash against, so every scope
-  // behaves globally and there is nothing to get wrong.
-  const inTask = facts.idempotencyScopes.filter((usage) => usage.insideTask);
+  const usages = facts.idempotencyScopes;
 
-  if (inTask.length === 0) {
+  if (usages.length === 0) {
     return notApplicable(
       id,
       title,
-      "No idempotency key is used inside a task, which the replay-safety check already reports.",
+      "No idempotency key is used at all, which the replay-safety check already reports.",
       "idempotency",
     );
   }
 
-  const global = inTask.filter((usage) => usage.scope === "global");
-  const attempt = inTask.filter((usage) => usage.scope === "attempt");
-  const run = inTask.filter((usage) => usage.scope === "run");
+  // Where the key was written only matters for the narrow scopes. Triggering
+  // from backend code means there is no parent run to hash against, so run and
+  // attempt scope behave globally there and neither is a defect.
+  //
+  // An explicit global scope is meaningful wherever it appears, and scoping it
+  // by lexical position was wrong: key construction is routinely factored into
+  // a helper, which sits at module scope even though it only ever runs inside
+  // a task. That made a correctly-scoped submission drop out of the score.
+  const global = usages.filter((usage) => usage.scope === "global");
+  const attempt = usages.filter((usage) => usage.scope === "attempt" && usage.insideTask);
+  const run = usages.filter((usage) => usage.scope === "run" && usage.insideTask);
+
+  if (global.length === 0 && attempt.length === 0 && run.length === 0) {
+    return notApplicable(
+      id,
+      title,
+      "Keys are only used outside a task, where every scope behaves globally.",
+      "idempotency",
+    );
+  }
 
   if (attempt.length > 0) {
     return {

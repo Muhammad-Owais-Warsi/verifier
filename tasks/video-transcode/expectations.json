@@ -1,0 +1,38 @@
+{
+    "$comment": "Requirements for the multi-format video processing task. Verifier-owned: the model never sees this file. Never name a Trigger.dev function, import, or primitive here -- the checks infer which primitive was used. Omit a key (or set it false) and its check reports n/a and drops out of the score, so only state what the task actually asks for.",
+    "$mapping": {
+        "mustNotDuplicateOnReplay": "'know the nature of the video to stop processsing same video mulitple times even if usbmitted by different users' -- the headline requirement. Identity comes from the content itself, not from the upload or the uploader, so the same bytes arriving twice must transcode once",
+        "mustIsolateConcurrentRuns": "same line. Two users uploading the same video at the same time are two separate runs, so a dedup table held in process memory neither sees the other nor survives a restart",
+        "mustSurviveInterruption": "'connections bereak should resume downloads' -- a broken transfer must resume from where it stopped rather than restart the whole download",
+        "transientFailuresMustRecover": "same line -- a dropped connection is the expected failure here, not an exceptional one",
+        "progressMustBeObservable": "'there should be proper status and states', repeated as 'Proper sttsua' -- state has to be readable while the work runs, not only after it finishes",
+        "mustReportPerItemOutcome": "'proper status and states' applied to 'multiple formats' -- each format needs its own state, so the parent has to read each one's result",
+        "failureMustBeIsolated": "same line -- 'failed' is only a meaningful state for one format if the other formats still finish",
+        "itemPayloadIsLarge": "the item is a video file, and the brief has it being downloaded. Switches on the size-cap checks, which ask whether the video moves by reference or gets carried inline",
+        "mustProvisionForMemory": "'big videos keep crashing the box' -- running out of memory is not an ordinary exception, so an unchanged retry repeats it on the same undersized machine and the format can never succeed",
+        "concurrencyMustBeManaged": "'we only have limited encoding capacity' -- no number is given, so the cap has to be enforced by the platform rather than matched to a specific value",
+        "mustIsolateTenantThroughput": "'one user shouldnt hog it all' -- a single global cap still lets whoever uploads first hold every slot, so the same limit has to be partitioned per user",
+        "mustWaitForAllTerminal": "'let me know when all the formats are ready' -- the parent cannot answer that without waiting on every format reaching a terminal state"
+    },
+    "$inferred": "Deliberately NOT set, because the brief never says it. outputMustStreamIncrementally does not apply -- 'proper status' is progress reporting, not partial output reaching a client. mustDispatchItemsTogether is left off because the format list is short and nothing asks for the renditions to be handed over in one go. mustSupportCancellation, mustAwaitExternalCompletion, schedulesMustBePerTenant and mustPrioritiseWork have no basis in the text at all. Adding any of these marks the model down for something it was never told.",
+    "requirements": {
+        "mustNotDuplicateOnReplay": true,
+        "mustIsolateConcurrentRuns": true,
+        "mustSurviveInterruption": true,
+        "transientFailuresMustRecover": true,
+        "progressMustBeObservable": true,
+        "mustReportPerItemOutcome": true,
+        "failureMustBeIsolated": true,
+        "itemPayloadIsLarge": true,
+        "mustProvisionForMemory": true,
+        "concurrencyMustBeManaged": true,
+        "mustIsolateTenantThroughput": true,
+        "mustWaitForAllTerminal": true,
+        "mustDispatchItemsTogether": false,
+        "mustSupportCancellation": false,
+        "mustAwaitExternalCompletion": false,
+        "outputMustStreamIncrementally": false,
+        "schedulesMustBePerTenant": false,
+        "mustPrioritiseWork": false
+    }
+}

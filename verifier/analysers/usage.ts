@@ -1,5 +1,4 @@
 import {
-  BATCH_METHODS,
   effectiveConcurrencyLimit,
   type UsageFacts,
 } from "../static/facts.js";
@@ -95,7 +94,7 @@ function analyseFanOut(facts: UsageFacts, requirements: Requirements): Check {
     };
   }
 
-  const batched = dispatches.filter((d) => BATCH_METHODS.has(d.method));
+  const batched = dispatches.filter((d) => d.isBatch);
   const sequential = dispatches.filter((d) => d.inSequentialLoop);
   const methods = [...new Set(dispatches.map((d) => d.method))];
 
@@ -161,18 +160,27 @@ function analyseConcurrency(facts: UsageFacts, requirements: Requirements): Chec
   // With no stated number, any platform-declared limit satisfies the requirement.
   const matching =
     required === undefined
-      ? limits.filter((entry) => typeof entry.limit === "number")
+      ? limits.filter((entry) => entry.declared)
       : limits.filter((entry) => entry.limit === required);
-  const declaredQueueLimits = facts.queues
-    .map((q) => q.concurrencyLimit)
-    .filter((limit): limit is number => typeof limit === "number");
+  const declaredQueues = facts.queues.filter((q) => q.limitDeclared);
+  const declaredQueueLimits = declaredQueues.map((q) =>
+    typeof q.concurrencyLimit === "number" ? String(q.concurrencyLimit) : "set at runtime",
+  );
+
+  // A limit read from the environment is a real limit the platform enforces;
+  // its value just is not in the source. When the task names a number we cannot
+  // confirm the match, but calling it a mismatch is a stronger claim than the
+  // evidence supports, so the wrong-value branch must not swallow this case.
+  const unreadableLimit =
+    required !== undefined &&
+    limits.some((entry) => entry.declared && entry.limit === undefined);
 
   // When the task states no number there is no value to mismatch, so a queue
   // declaring any limit satisfies the requirement wherever it sits. Requiring it
   // on a dispatched worker conflated this with the decomposition check and
   // reported a submission whose only task carries a queue as having the "wrong
   // value" against an undefined number.
-  const satisfiedWithoutNumber = required === undefined && declaredQueueLimits.length > 0;
+  const satisfiedWithoutNumber = required === undefined && declaredQueues.length > 0;
 
   if (handRolled.length > 0) {
     return {
@@ -190,7 +198,7 @@ function analyseConcurrency(facts: UsageFacts, requirements: Requirements): Chec
     };
   }
 
-  if (matching.length > 0 || satisfiedWithoutNumber) {
+  if (matching.length > 0 || satisfiedWithoutNumber || unreadableLimit) {
     return {
       id: "usage.concurrency_via_queue",
       category: "concurrency",
@@ -204,12 +212,14 @@ function analyseConcurrency(facts: UsageFacts, requirements: Requirements): Chec
               .map((entry) => `${entry.worker.taskId ?? entry.worker.name} -> ${entry.source}`)
               .join("; ")
           : `queue(s) declaring concurrencyLimit ${declaredQueueLimits.join(", ")}`,
-      why: `The limit${required === undefined ? "" : ` of ${required}`} is declared on a queue, so the platform enforces it across every worker rather than only within one process.`,
+      why: unreadableLimit
+        ? `The limit is declared on a queue, so the platform enforces it across every worker. Its value is configured at runtime rather than written in the source, so the required ${required} could not be confirmed from the code.`
+        : `The limit${required === undefined ? "" : ` of ${required}`} is declared on a queue, so the platform enforces it across every worker rather than only within one process.`,
       evidence: facts.queues.map((q) => q.evidence),
     };
   }
 
-  if (facts.queues.length === 0 && limits.every((entry) => entry.limit === undefined)) {
+  if (facts.queues.length === 0 && limits.every((entry) => !entry.declared)) {
     return {
       id: "usage.concurrency_via_queue",
       category: "concurrency",
@@ -233,7 +243,7 @@ function analyseConcurrency(facts: UsageFacts, requirements: Requirements): Chec
     mechanism: "platform",
     expected: expectedQueueText,
     actual: `declared limit(s): ${declaredQueueLimits.join(", ") || "none on the worker task"}`,
-    why: `A queue is used, but its limit does not match the required ${required}. The right primitive is in place with the wrong value.`,
+    why: `A queue is used, but its limit of ${declaredQueueLimits.join(", ") || "none"} does not match the required ${required}. The right primitive is in place with the wrong value.`,
     evidence: facts.queues.map((q) => q.evidence),
   };
 }
@@ -600,17 +610,22 @@ function analyseDurability(facts: UsageFacts, requirements: Requirements): Check
     };
   }
 
+  // Never waiting is not itself a durability defect. A pipeline chained with
+  // plain triggers puts a run boundary at every stage, which is durable on its
+  // own, and the two real faults are each someone else's check: blocking
+  // sleeps fail above, and children dispatched and abandoned fail the fan-in
+  // check. Failing here as well scored the same mistake twice.
   return {
     id: "usage.durable_waits",
     category: "durability",
     title: "Waiting checkpoints instead of blocking the process",
-    status: checkpointing ? "pass" : "fail",
-    mechanism: checkpointing ? "platform" : "absent",
+    status: checkpointing ? "pass" : "na",
+    mechanism: checkpointing ? "platform" : undefined,
     expected: "wait.for / wait.until or an *AndWait dispatch",
-    actual: checkpointing ? "waits at platform waitpoints" : "no platform waits found",
+    actual: checkpointing ? "waits at platform waitpoints" : "the submission never waits",
     why: checkpointing
       ? "Waiting happens at platform waitpoints, so the run is checkpointed and can resume after an interruption."
-      : "Nothing waits at a platform waitpoint, so there is no checkpoint from which an interrupted run could resume.",
+      : "Nothing waits and nothing sleeps, so there is no waiting to checkpoint. Whether work is handed off correctly is the fan-in check's to judge.",
     evidence: facts.waitUsage,
   };
 }
@@ -859,8 +874,12 @@ export function analyseUsage(facts: UsageFacts, requirements: Requirements): Che
           : "no machine preset declared",
       whyPass:
         "The memory-hungry task declares a machine preset and an out-of-memory retry, so it gets the headroom it needs and reruns on a larger machine when it still runs out.",
+      // Says which half is missing. The single message claimed no machine size
+      // was set while listing the machine presets it had found as evidence.
       whyFail:
-        "The task states that this work exhausts its memory, but nothing raises the machine size or handles an out-of-memory failure. Running out of memory is not an ordinary exception and a normal retry repeats it on the same undersized machine, so the item can never succeed.",
+        facts.machineUsage.length > 0
+          ? "The task raises the machine size but does nothing when that is still not enough. Running out of memory is not an ordinary exception: a normal retry repeats it on the same machine, so an item too big for the preset can never succeed. An out-of-memory retry reruns it on a larger one."
+          : "The task states that this work exhausts its memory, but nothing raises the machine size or handles an out-of-memory failure. Running out of memory is not an ordinary exception and a normal retry repeats it on the same undersized machine, so the item can never succeed.",
       evidence: [...facts.machineUsage, ...facts.outOfMemoryUsage],
       disabledWhy: "The task has no memory-bound work.",
     }),

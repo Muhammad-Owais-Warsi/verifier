@@ -17,9 +17,28 @@ export const DISPATCH_METHODS = new Set([
   "batchTrigger",
   "batchTriggerAndWait",
   "triggerAndSubscribe",
+  // The standalone `batch` namespace, which fans out to several *different*
+  // tasks in one call. Only the task-bound `task.batchTrigger*` forms were
+  // recognised, so a pipeline dispatching mixed work through `batch` looked
+  // like it never fanned out at all, and the task doing the real orchestration
+  // was passed over in favour of a shallower caller.
+  "triggerByTask",
+  "triggerByTaskAndWait",
 ]);
 
-export const BATCH_METHODS = new Set(["batchTrigger", "batchTriggerAndWait"]);
+/** Batch by name alone, whatever they are called on. */
+export const BATCH_METHODS = new Set([
+  "batchTrigger",
+  "batchTriggerAndWait",
+  "triggerByTask",
+  "triggerByTaskAndWait",
+]);
+
+/**
+ * Batch only when called on the SDK's `batch` export: `batch.trigger([...])`
+ * fans out, while `myTask.trigger(...)` dispatches a single run.
+ */
+const BATCH_NAMESPACE_METHODS = new Set(["trigger", "triggerAndWait"]);
 
 /** SDK exports that define a task. */
 export const TASK_FACTORIES = new Set(["task", "schemaTask"]);
@@ -32,6 +51,8 @@ const WAIT_TOKEN_METHODS = /^(createToken|forToken|completeToken)$/;
 const STREAM_METHODS = /^(pipe|read|append|writer|define|input)$/;
 const SCHEDULE_MUTATION_METHODS = /^(create|update|deactivate|activate)$/;
 const UNWRAP_METHOD = /^unwrap$/;
+/** Reads that check on something running elsewhere, i.e. real polling. */
+const REMOTE_STATUS_METHODS = /^(retrieve|poll|list|subscribeToRun|fetchStream)$/;
 const SIGNAL_PROPERTY = /^signal$/;
 const OK_PROPERTY = /^ok$/;
 const OUTPUT_PROPERTY = /^output$/;
@@ -130,7 +151,16 @@ export interface TaskFact {
   retryMaxAttempts?: number;
   hasRetryConfig: boolean;
   /** Queue attached to this task, either inline or by reference. */
-  queue?: { kind: "inline" | "reference"; concurrencyLimit?: number; ref?: string };
+  /**
+   * Queue attached to this task, either inline or by reference. limitDeclared
+   * separates "no limit" from "a limit whose value is set at runtime".
+   */
+  queue?: {
+    kind: "inline" | "reference";
+    concurrencyLimit?: number;
+    limitDeclared?: boolean;
+    ref?: string;
+  };
   dispatches: DispatchFact[];
   manualRetryLoops: Evidence[];
   /** Promise.all / allSettled over work that is not a task dispatch. */
@@ -144,6 +174,8 @@ export interface QueueFact {
   varName: string;
   queueName?: string;
   concurrencyLimit?: number;
+  /** The property is present, even if its value is only known at runtime. */
+  limitDeclared: boolean;
   evidence: Evidence;
 }
 
@@ -235,13 +267,155 @@ function evidenceFor(node: Node, rootDir: string): Evidence {
 function numericValue(node: Node | undefined): number | undefined {
   if (!node) return undefined;
   if (Node.isNumericLiteral(node)) return node.getLiteralValue();
+
+  if (Node.isPrefixUnaryExpression(node)) {
+    const operand = numericValue(node.getOperand());
+    if (operand === undefined) return undefined;
+    return node.getOperatorToken() === SyntaxKind.MinusToken ? -operand : operand;
+  }
+
+  // `const LIMIT = 3` used as `concurrencyLimit: LIMIT` is the same number,
+  // just named. Follow the binding rather than giving up on it.
+  if (Node.isIdentifier(node)) {
+    const declaration = node
+      .getDefinitionNodes()
+      .find((definition) => Node.isVariableDeclaration(definition));
+    const initializer = declaration?.getInitializer();
+    if (initializer && !Node.isIdentifier(initializer)) return numericValue(initializer);
+  }
+
   return undefined;
 }
 
+/**
+ * Whether a value is produced by mapping over a collection, so its width is
+ * the item count rather than a handful of named operations.
+ */
+function iteratesCollection(node: Node, depth = 0): boolean {
+  if (depth > 3) return false;
+
+  const mapped = [node, ...node.getDescendantsOfKind(SyntaxKind.CallExpression)].some(
+    (candidate) => {
+      if (!Node.isCallExpression(candidate)) return false;
+      const callee = candidate.getExpression();
+      return Node.isPropertyAccessExpression(callee) && /^(map|flatMap)$/.test(callee.getName());
+    },
+  );
+  if (mapped) return true;
+
+  if (Node.isIdentifier(node)) {
+    const declaration = node
+      .getDefinitionNodes()
+      .find((definition) => Node.isVariableDeclaration(definition));
+    const initializer: Node | undefined = Node.isVariableDeclaration(declaration)
+      ? declaration.getInitializer()
+      : undefined;
+    if (initializer) return iteratesCollection(initializer, depth + 1);
+  }
+
+  return false;
+}
+
+/**
+ * Reads the task variables a `batch` call fans out to.
+ *
+ * The items are usually assembled elsewhere -- `batch.triggerByTaskAndWait([
+ * ...renditionItems, thumbnailItem])` -- so follow identifier arguments and
+ * spreads back to their declarations before looking for the `task` field.
+ */
+function collectBatchTargets(call: Node, taskNames: ReadonlySet<string>): string[] {
+  if (!Node.isCallExpression(call)) return [];
+
+  const roots: Node[] = [];
+
+  const expand = (node: Node | undefined, depth: number) => {
+    if (!node || depth > 3) return;
+    roots.push(node);
+
+    if (Node.isSpreadElement(node)) return expand(node.getExpression(), depth + 1);
+
+    if (Node.isArrayLiteralExpression(node)) {
+      for (const element of node.getElements()) expand(element, depth + 1);
+      return;
+    }
+
+    if (Node.isIdentifier(node)) {
+      const declaration = node
+        .getDefinitionNodes()
+        .find((definition) => Node.isVariableDeclaration(definition));
+      const initializer = declaration?.getInitializer();
+      if (initializer) expand(initializer, depth + 1);
+    }
+  };
+
+  for (const argument of call.getArguments()) expand(argument, 0);
+
+  const targets = new Set<string>();
+  for (const root of roots) {
+    for (const property of root.getDescendantsOfKind(SyntaxKind.PropertyAssignment)) {
+      if (property.getName() !== "task") continue;
+      const value = property.getInitializer();
+      if (value && Node.isIdentifier(value) && taskNames.has(value.getText())) {
+        targets.add(value.getText());
+      }
+    }
+  }
+
+  return [...targets];
+}
+
+/**
+ * Whether a config property is present at all, regardless of whether its value
+ * can be read at build time.
+ *
+ * `concurrencyLimit: Number(process.env.ENCODE_CONCURRENCY ?? 3)` declares a
+ * real, platform-enforced limit; the number simply is not knowable from the
+ * source. Treating unreadable as absent reported a submission that configures
+ * its queues from the environment -- the better practice -- as having declared
+ * no limit at all.
+ */
+function hasProperty(object: Node | undefined, name: string): boolean {
+  return objectProperty(object, name) !== undefined;
+}
+
+/**
+ * Reads a config value, following shorthand to its declaration.
+ *
+ * `{ retry }` and `{ retry: { maxAttempts: 8 } }` are the same configuration
+ * written two ways, and hoisting a shared policy into a const to reuse across
+ * tasks is better practice than inlining it. Handling only the long form made
+ * the shorthand read as absent, so a submission with one correct retry policy
+ * applied to every task was reported as having none. The same helper reads
+ * `id`, `queue`, `concurrencyLimit` and `maxAttempts`, so all of them were
+ * affected.
+ */
 function objectProperty(object: Node | undefined, name: string): Node | undefined {
   if (!object || !Node.isObjectLiteralExpression(object)) return undefined;
+
   const property = object.getProperty(name);
-  if (property && Node.isPropertyAssignment(property)) return property.getInitializer();
+  if (!property) return undefined;
+
+  if (Node.isPropertyAssignment(property)) return property.getInitializer();
+
+  if (Node.isShorthandPropertyAssignment(property)) {
+    // Resolve the binding, then keep following aliases so a const pointing at
+    // another const still lands on the literal.
+    let current: Node | undefined = property.getNameNode();
+
+    for (let hop = 0; hop < 5 && current; hop++) {
+      if (!Node.isIdentifier(current)) return current;
+
+      const definitions: Node[] = current.getDefinitionNodes();
+      const declaration = definitions.find((node) => Node.isVariableDeclaration(node));
+      if (!declaration || !Node.isVariableDeclaration(declaration)) return undefined;
+
+      const initializer: Node | undefined = declaration.getInitializer();
+      if (!initializer) return undefined;
+
+      current = initializer;
+    }
+  }
+
   return undefined;
 }
 
@@ -427,7 +601,47 @@ function findInlineParallelism(
       .getDescendantsOfKind(SyntaxKind.CallExpression)
       .some((inner) => resolver.isTriggerMember(inner.getExpression(), DISPATCH_METHODS));
 
-    if (!dispatchesInside) found.push(evidenceFor(call, rootDir));
+    if (dispatchesInside) continue;
+
+    // The anti-pattern is running a *collection* in-process instead of
+    // dispatching it, so there has to be a collection. An array literal of
+    // distinct operations -- feeding a subprocess, uploading its output,
+    // awaiting its exit -- is ordinary concurrent I/O within one step, and
+    // reading it as fan-out reported correct stream plumbing as a defect.
+    const argument = call.getArguments()[0];
+    if (!argument || !iteratesCollection(argument)) continue;
+
+    // Assembling the items for a batch call is not parallel work. Building an
+    // idempotency key per item is asynchronous, so the array gets built with
+    // Promise.all, and flagging that reported a correct batch fan-out as
+    // in-process parallelism -- the opposite of what the code does.
+    const awaited = call.getDescendantsOfKind(SyntaxKind.AwaitExpression);
+    const onlyAwaitsSdk =
+      awaited.length > 0 &&
+      awaited.every((expression) => {
+        const inner = expression.getExpression();
+        return Node.isCallExpression(inner) && resolver.isTriggerMember(inner.getExpression());
+      });
+
+    if (onlyAwaitsSdk) continue;
+
+    // Same intent, for items whose keys are plain strings: the callback
+    // returns dispatch descriptors rather than doing anything.
+    const buildsDispatchItems = call
+      .getDescendantsOfKind(SyntaxKind.ObjectLiteralExpression)
+      .some((literal) => {
+        const names = literal.getProperties().flatMap((property) => {
+          if (Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property)) {
+            return [property.getName()];
+          }
+          return [];
+        });
+        return names.includes("payload") && (names.includes("task") || names.includes("options"));
+      });
+
+    if (buildsDispatchItems) continue;
+
+    found.push(evidenceFor(call, rootDir));
   }
 
   return found;
@@ -949,13 +1163,33 @@ function collectAncillaryFacts(project: Project, rootDir: string, resolver: Trig
 
       if (text === "setTimeout") {
         const delay = numericValue(call.getArguments()[1]);
-        const insideLoop = Boolean(
-          call.getFirstAncestor(
-            (a) =>
-              Node.isWhileStatement(a) || Node.isForStatement(a) || Node.isDoStatement(a),
-          ),
+        const loop = call.getFirstAncestor(
+          (a) => Node.isWhileStatement(a) || Node.isForStatement(a) || Node.isDoStatement(a),
         );
-        if ((delay !== undefined && delay >= LONG_SLEEP_MS) || insideLoop) {
+
+        // Inside a loop this is polling, and polling is only a defect when it
+        // waits on something durable that a waitpoint could park on -- another
+        // run, an external job. A loop touching nothing but local state is
+        // work the step is doing, such as draining an encoder's output files
+        // while it runs in this process, and no checkpoint can replace it:
+        // the run has to stay executing for the subprocess to keep going.
+        //
+        // The interval being long does not change that, so the locality test
+        // governs the whole loop case. Judging a loop by its delay reported
+        // that same drain as a blocking sleep.
+        const pollsSomethingRemote = (scope: Node) =>
+          scope.getDescendantsOfKind(SyntaxKind.CallExpression).some((inner) => {
+            const callee = inner.getExpression();
+            return (
+              callee.getText() === "fetch" ||
+              resolver.isTriggerMember(callee, REMOTE_STATUS_METHODS)
+            );
+          });
+
+        const insideLoop = Boolean(loop) && pollsSomethingRemote(loop!);
+        const longBareSleep = !loop && delay !== undefined && delay >= LONG_SLEEP_MS;
+
+        if (longBareSleep || insideLoop) {
           pollingSleeps.push({
             ...evidenceFor(call, rootDir),
             snippet: insideLoop
@@ -988,13 +1222,24 @@ function collectAncillaryFacts(project: Project, rootDir: string, resolver: Trig
         // attempts of one run and nothing wider. Keys built through
         // idempotencyKeys.create carry an explicit scope and are classified at
         // that call site instead.
+        //
+        // Decided on the type rather than the syntax. Matching only literals
+        // meant a key returned by a helper -- `idempotencyKey: syncKey(sync)`,
+        // the natural way to keep key construction in one place -- was
+        // classified as neither, so the scope check reported n/a and the
+        // submission's replay safety was never actually verified. The SDK's
+        // IdempotencyKey is a branded type, so anything still resolving to a
+        // plain string is a raw key however it was produced.
         const value = property.getInitializer();
-        const isRawString =
-          value &&
-          (Node.isStringLiteral(value) ||
-            Node.isTemplateExpression(value) ||
-            Node.isNoSubstitutionTemplateLiteral(value) ||
-            Node.isBinaryExpression(value));
+        const isRawString = Boolean(value) && !resolver.isTriggerTyped(value) && (() => {
+          try {
+            const type = value!.getType();
+            const parts = type.isUnion() ? type.getUnionTypes() : [type];
+            return parts.every((part) => part.isString() || part.isStringLiteral());
+          } catch {
+            return false;
+          }
+        })();
 
         if (isRawString) {
           idempotencyScopes.push({
@@ -1176,6 +1421,7 @@ export function extractFacts(outputDir: string, project = createProject(outputDi
           queue = {
             kind: "inline",
             concurrencyLimit: numericValue(objectProperty(queueValue, "concurrencyLimit")),
+            limitDeclared: hasProperty(queueValue, "concurrencyLimit"),
           };
         } else {
           queue = { kind: "reference", ref: queueValue.getText() };
@@ -1210,16 +1456,30 @@ export function extractFacts(outputDir: string, project = createProject(outputDi
       if (!Node.isPropertyAccessExpression(expression)) continue;
 
       const method = expression.getName();
-      const isBatch = BATCH_METHODS.has(method);
+      const onBatchNamespace =
+        BATCH_NAMESPACE_METHODS.has(method) &&
+        resolver.triggerExportName(expression.getExpression()) === "batch";
+      const isBatch = BATCH_METHODS.has(method) || onBatchNamespace;
 
-      fact.dispatches.push({
-        target: expression.getExpression().getText(),
-        method,
-        inSequentialLoop: isInSequentialLoop(call),
-        isBatch,
-        chunked: isBatch && isChunkedBatch(call),
-        evidence: evidenceFor(call, rootDir),
-      });
+      // A `batch` call names its targets inside the items rather than as the
+      // receiver, so read them out. Without this the dispatch points at the
+      // namespace, no task is recorded as a worker, and the checks that look
+      // at what the orchestrator handed off see nothing.
+      const usesNamespace = onBatchNamespace || method.startsWith("triggerByTask");
+      const targets = usesNamespace
+        ? collectBatchTargets(call, taskNames)
+        : [expression.getExpression().getText()];
+
+      for (const target of targets.length > 0 ? targets : [expression.getExpression().getText()]) {
+        fact.dispatches.push({
+          target,
+          method,
+          inSequentialLoop: isInSequentialLoop(call),
+          isBatch,
+          chunked: isBatch && isChunkedBatch(call),
+          evidence: evidenceFor(call, rootDir),
+        });
+      }
     }
 
     fact.manualRetryLoops = findManualRetryLoops(node, rootDir);
@@ -1252,6 +1512,7 @@ export function extractFacts(outputDir: string, project = createProject(outputDi
         varName: declaration.getName(),
         queueName: objectProperty(config, "name")?.getText().replace(/['"`]/g, ""),
         concurrencyLimit: numericValue(objectProperty(config, "concurrencyLimit")),
+        limitDeclared: hasProperty(config, "concurrencyLimit"),
         evidence: evidenceFor(declaration, rootDir),
       });
     }
@@ -1267,9 +1528,7 @@ export function extractFacts(outputDir: string, project = createProject(outputDi
   // Preference order: wherever the batch dispatch is, then whichever
   // dispatcher waits on children, then the one handing off the most work.
   const orchestrator =
-    dispatchers.find((fact) =>
-      fact.dispatches.some((dispatch) => BATCH_METHODS.has(dispatch.method)),
-    ) ??
+    dispatchers.find((fact) => fact.dispatches.some((dispatch) => dispatch.isBatch)) ??
     dispatchers.find((fact) =>
       fact.dispatches.some((dispatch) => /AndWait$/.test(dispatch.method)),
     ) ??
@@ -1298,18 +1557,25 @@ export function extractFacts(outputDir: string, project = createProject(outputDi
 export function effectiveConcurrencyLimit(
   task: TaskFact,
   queues: QueueFact[],
-): { limit?: number; source?: string } {
-  if (!task.queue) return {};
+): { limit?: number; declared: boolean; source?: string } {
+  if (!task.queue) return { declared: false };
 
   if (task.queue.kind === "inline") {
-    return { limit: task.queue.concurrencyLimit, source: "inline queue config" };
+    return {
+      limit: task.queue.concurrencyLimit,
+      declared: Boolean(task.queue.limitDeclared),
+      source: "inline queue config",
+    };
   }
 
   const referenced = queues.find((q) => q.varName === task.queue?.ref);
-  if (!referenced) return { source: `queue reference "${task.queue.ref}" (not resolved)` };
+  if (!referenced) {
+    return { declared: false, source: `queue reference "${task.queue.ref}" (not resolved)` };
+  }
 
   return {
     limit: referenced.concurrencyLimit,
+    declared: referenced.limitDeclared,
     source: `queue "${referenced.queueName ?? referenced.varName}"`,
   };
 }

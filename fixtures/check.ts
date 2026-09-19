@@ -282,6 +282,53 @@ const FIXTURES: Record<string, FixtureExpectation> = {
       "usage.replay_safe": "pass",
     },
   },
+  "batch-namespace": {
+    note: "Mixed fan-out via the batch namespace, env-configured queue limit.",
+    requirements: DURABLE_REQUIREMENTS,
+    checks: {
+      "static.type_checks": "pass",
+      "usage.work_split_into_tasks": "pass",
+      // The limit is Number(process.env...), not a literal.
+      "usage.concurrency_via_queue": "pass",
+      // batch.triggerByTaskAndWait is a batch dispatch and an orchestrator.
+      "usage.fan_out_batched": "pass",
+      "usage.waits_for_children": "pass",
+      "usage.per_item_outcome": "pass",
+      // Promise.all here builds the items; the drain loop is local work.
+      "usage.failure_isolated": "pass",
+      "usage.durable_waits": "pass",
+      "usage.replay_safe": "pass",
+      "limits.idempotency_scope": "pass",
+    },
+  },
+  "shorthand-config": {
+    note: "Shared retry/queue consts applied with shorthand, key from a helper.",
+    requirements: DURABLE_REQUIREMENTS,
+    checks: {
+      "static.type_checks": "pass",
+      // The bug: shorthand `{ retry }` read as no retry policy at all.
+      "usage.retries_via_engine": "pass",
+      "usage.concurrency_via_queue": "pass",
+      "usage.fan_out_batched": "pass",
+      "usage.waits_for_children": "pass",
+      "usage.per_item_outcome": "pass",
+      "usage.failure_isolated": "pass",
+      "usage.cancellable": "pass",
+      "usage.replay_safe": "pass",
+      "limits.idempotency_scope": "pass",
+    },
+  },
+  "helper-built-key": {
+    note: "Same shape, but the key helper returns a plain string (run scope).",
+    requirements: DURABLE_REQUIREMENTS,
+    checks: {
+      "static.type_checks": "pass",
+      "usage.retries_via_engine": "pass",
+      "usage.replay_safe": "pass",
+      // Must be graded, not skipped: a non-literal key used to report n/a.
+      "limits.idempotency_scope": "fail",
+    },
+  },
   "v3-reflexes": {
     note: "Correct structure, expressed with the APIs the SDK renamed.",
     requirements: ADVANCED_REQUIREMENTS,
