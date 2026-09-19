@@ -2,6 +2,40 @@
 
 Checks whether a solution **genuinely uses Trigger.dev the right way**, just by reading its source code. Nothing is deployed, nothing is run, no credentials needed.
 
+
+
+## Harbor
+
+`harbor/video-encoder/` is the video task packaged as a [Harbor](https://www.harborframework.com) task, so anyone can run it with only Docker installed:
+
+```bash
+harbor run --path harbor/video-encoder --agent <agent> --model <provider>/<model>
+```
+
+`--agent` is the coding CLI that runs inside the container (`claude-code`, `codex`, `cursor-cli`, `gemini-cli`, `opencode`, `terminus-2`, ...) and `--model` is a LiteLLM-style id. Export the matching API key first so Harbor can pass it in:
+
+```bash
+export OPENAI_API_KEY=sk-...
+harbor run --path harbor/video-encoder --agent terminus-2 --model openai/gpt-5.6-sol
+```
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+harbor run --path harbor/video-encoder --agent claude-code --model anthropic/claude-opus-4-1
+```
+
+`terminus-2` is model-agnostic, so use it for any model whose own CLI is fussy about ids. Give a slow model more room with `--agent-timeout-multiplier 2` rather than editing `task.toml`. A timed-out agent is still graded on whatever it wrote.
+
+The agent gets an empty `/app` with verbatim copies of `TASK.md` and `setup.md`, and sets the project up itself. Harbor copies `tests/` into the container only after the agent stops, so the expectations are unreadable while it works. `tests/test.sh` runs the verifier and writes `score.total` to `/logs/verifier/reward.txt`.
+
+The copies under `harbor/video-encoder/` are generated — re-run `npm run harbor:sync` after changing the verifier, the expectations or the brief.
+
+To give a slow model more room without editing the task, use a multiplier:
+```bash
+  harbor run --path harbor/video-encoder --agent terminus-2 --model openai/gpt-5.6-sol \
+    --agent-timeout-multiplier 2
+```
+
 ## How to run
 
 ```bash
@@ -54,6 +88,7 @@ Limits (only active when the task reaches the cap): `batch_size`, `payload_size`
 1. Add the brief to shared `tasks/setup.md`.
 2. Add `tasks/<name>/expectations.json` with plain-word requirements.
 3. Grade: `npx tsx verifier/run.ts /path/to/solution <name>`.
+
 
 ## UI
 

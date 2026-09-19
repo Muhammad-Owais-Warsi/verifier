@@ -7,6 +7,7 @@
   "scripts": {
     "verify": "tsx verifier/run.ts",
     "fixtures": "tsx fixtures/check.ts",
+    "harbor:sync": "bash harbor/sync.sh",
     "ui": "tsx ui/server.ts"
   },
   "dependencies": {

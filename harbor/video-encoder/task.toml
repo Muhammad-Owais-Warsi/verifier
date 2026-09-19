@@ -1,0 +1,16 @@
+schema_version = "1.4"
+
+[metadata]
+author_name = "random"
+
+
+[verifier]
+timeout_sec = 900.0
+# Grading needs nothing from the network; the toolchain is baked into the image.
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 2700.0
+
+[environment]
+build_timeout_sec = 900.0

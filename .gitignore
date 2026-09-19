@@ -9,3 +9,6 @@ dist/
 
 # Verifier run artifacts
 results/
+
+# Harbor job output
+jobs/
