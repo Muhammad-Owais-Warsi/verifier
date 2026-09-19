@@ -1,3 +1,5 @@
+GPT 5.6 SOL
+
 Four of the six come from one decision: every stage fires the next with trigger() and immediately forgets it.
   Nobody ever waits, so the pipeline has to track itself in Postgres.
 

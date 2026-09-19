@@ -569,11 +569,14 @@ function findManualRetryLoops(scope: Node, rootDir: string): Evidence[] {
       const retryish = tryStatements.some((tryStatement) => {
         const catchClause = tryStatement.getCatchClause();
         if (!catchClause) return false;
-        // A catch that simply rethrows is error translation, not a retry.
-        const rethrowsOnly =
-          catchClause.getBlock().getStatements().length === 1 &&
-          catchClause.getBlock().getStatements()[0].getKind() === SyntaxKind.ThrowStatement;
-        return !rethrowsOnly;
+
+        // A catch that ends by rethrowing is not retrying: the throw leaves
+        // the loop. Requiring the throw to be the *only* statement missed the
+        // ordinary shape of recording the failure first, and read a
+        // claim-and-dispatch loop that gives up on error as a retry loop.
+        const statements = catchClause.getBlock().getStatements();
+        const rethrows = statements.at(-1)?.getKind() === SyntaxKind.ThrowStatement;
+        return !rethrows;
       });
 
       if (retryish) found.push(evidenceFor(loop, rootDir));
