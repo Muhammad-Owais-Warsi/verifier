@@ -1,0 +1,23 @@
+{
+  "$comment": "Requirements for the evidence-ingest task (solver brief in tasks/setup.md). Verifier-owned: the model never sees this file. Never name a Trigger.dev function, import, or primitive here -- the checks infer which primitive was used. Omit a key (or set it false) and its check reports n/a and drops out of the score, so only state what the task actually asks for.",
+  "$weighting": "Deliberately aimed at the two things primitive-selection checks miss. First, the size caps: itemCount 5000 exceeds what one batch call accepts, and itemPayloadIsLarge switches on the payload and output size checks. Second, the deprecated surfaces, which need no requirement key because static.no_deprecated_apis catches them -- the task's error-handling section routes through handleError (now catchError), its audit section through onStart (now onStartAttempt), its live-output section through metadata.stream (now streams.pipe), and its full-rewrite progress record through metadata.save (now metadata.replace). The task states no prohibition on hand-rolling, so a userland substitute is reported rather than prevented.",
+  "requirements": {
+    "itemCount": 5000,
+    "itemPayloadIsLarge": true,
+    "outputMustStreamIncrementally": true,
+    "concurrencyMustBeManaged": true,
+    "mustDispatchItemsTogether": true,
+    "transientFailuresMustRecover": true,
+    "mustWaitForAllTerminal": true,
+    "mustReportPerItemOutcome": true,
+    "failureMustBeIsolated": true,
+    "progressMustBeObservable": true,
+    "mustSupportCancellation": true,
+    "mustSurviveInterruption": true,
+    "mustIsolateConcurrentRuns": true,
+    "mustNotDuplicateOnReplay": true,
+    "mustProvisionForMemory": true,
+    "mustPrioritiseWork": true,
+    "mustIsolateTenantThroughput": true
+  }
+}

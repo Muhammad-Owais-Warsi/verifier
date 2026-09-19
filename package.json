@@ -1,0 +1,23 @@
+{
+  "name": "trigger-verify",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Verifies whether a submission genuinely uses Trigger.dev primitives, against the real platform.",
+  "scripts": {
+    "verify": "tsx verifier/run.ts",
+    "fixtures": "tsx fixtures/check.ts",
+    "ui": "tsx ui/server.ts"
+  },
+  "dependencies": {
+    "@trigger.dev/sdk": "^4.5.16",
+    "dotenv": "^17.2.3",
+    "trigger.dev": "^4.5.16",
+    "ts-morph": "^27.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.1"
+  }
+}

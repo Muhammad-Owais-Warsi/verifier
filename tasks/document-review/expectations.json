@@ -1,0 +1,26 @@
+{
+  "$comment": "Requirements for the document-review task (solver brief in tasks/setup.md). Verifier-owned: the model never sees this file. Never name a Trigger.dev function, import, or primitive here -- the checks infer which primitive was used. Omit a key (or set it false) and its check reports n/a and drops out of the score, so only state what the task actually asks for.",
+  "$provenance": "Reconstructed from results/history/report-2026-09-18T10-36-33-221Z.json, the run that scored 0.913 with exactly two failures (usage.cancellable, usage.memory_provisioned). That report graded all 18 usage checks with no n/a, and its concurrency check expected 'a queue with a concurrencyLimit' rather than a number, which fixes concurrencyMustBeManaged over maxConcurrent and means itemCount was unset.",
+  "$addedSinceThatRun": "itemCount and itemPayloadIsLarge were not in the original run because the size-cap checks did not exist yet. Both are faithful to the task text: it states a document yields 3 to 800 sections, and that extracted text is routinely 20-50 MB. They switch on limits.metadata_size, limits.payload_size and limits.output_size. 800 is under the batch cap, so limits.batch_size correctly stays n/a. Scores are not directly comparable to 0.913 either way, since that run had 23 checks and this one has 29.",
+  "requirements": {
+    "itemCount": 800,
+    "itemPayloadIsLarge": true,
+    "concurrencyMustBeManaged": true,
+    "mustDispatchItemsTogether": true,
+    "transientFailuresMustRecover": true,
+    "mustWaitForAllTerminal": true,
+    "mustReportPerItemOutcome": true,
+    "failureMustBeIsolated": true,
+    "progressMustBeObservable": true,
+    "mustSupportCancellation": true,
+    "mustSurviveInterruption": true,
+    "mustIsolateConcurrentRuns": true,
+    "mustNotDuplicateOnReplay": true,
+    "mustAwaitExternalCompletion": true,
+    "outputMustStreamIncrementally": true,
+    "mustProvisionForMemory": true,
+    "schedulesMustBePerTenant": true,
+    "mustPrioritiseWork": true,
+    "mustIsolateTenantThroughput": true
+  }
+}
