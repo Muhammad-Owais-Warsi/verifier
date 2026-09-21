@@ -15,4 +15,4 @@ Build the project in this directory:
 - Put every task definition under `src/trigger/`.
 - Write only inside this directory.
 
-You do not need to deploy or run anything.
+You do not need to deploy or run anything, jsut install the deps at last
