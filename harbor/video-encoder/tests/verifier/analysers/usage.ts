@@ -773,7 +773,19 @@ function analyseExternalOrchestrator(facts: UsageFacts, requirements: Requiremen
     };
   }
 
-  const external = facts.externalOrchestrators;
+  // A queue pulled off npm and a queue written in SQL are the same mistake.
+  // Only the first was ever detected, so the more common one -- a table with a
+  // status column and a claim loop -- scored as a pass.
+  const imported = facts.externalOrchestrators;
+  const homegrown = facts.databaseSchedulers;
+  const external = [...imported, ...homegrown];
+
+  const actualWhenFailing = [
+    imported.length > 0 ? `${imported.length} external queue/scheduler dependency(ies)` : "",
+    homegrown.length > 0 ? `${homegrown.length} hand-built claim query(ies)` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return {
     id,
@@ -782,15 +794,76 @@ function analyseExternalOrchestrator(facts: UsageFacts, requirements: Requiremen
     status: external.length === 0 ? "pass" : "fail",
     mechanism: external.length === 0 ? "platform" : "userland",
     expected: "queueing and scheduling owned by Trigger.dev alone",
-    actual:
-      external.length === 0
-        ? "no competing queue or scheduler"
-        : `${external.length} external queue/scheduler dependency(ies)`,
+    actual: external.length === 0 ? "no competing queue or scheduler" : actualWhenFailing,
     why:
       external.length === 0
         ? "Queueing and scheduling are the platform's, so there is one place where work is recorded, retried and observed."
-        : "A second queue or scheduler is introduced next to Trigger.dev, so the work is owned by two systems at once. Everything the platform gives for free — the run record, the retry history, the concurrency accounting, the dashboard — now covers only half the pipeline, and the two halves drift apart on the first failure. It is also infrastructure to deploy and keep alive for a job the platform already does.",
+        : imported.length > 0
+          ? "A second queue or scheduler is introduced next to Trigger.dev, so the work is owned by two systems at once. Everything the platform gives for free — the run record, the retry history, the concurrency accounting, the dashboard — now covers only half the pipeline, and the two halves drift apart on the first failure. It is also infrastructure to deploy and keep alive for a job the platform already does."
+          : "The database is being used as the job queue: rows are claimed for a worker with locks and moved out of a pending state, which is a scheduler written by hand next to the one already running. It decides what runs next and how many run at once, so the platform's own concurrency accounting, retry history and dashboard describe only part of the truth. Every piece of it — the locking, the claim, the stuck-row recovery when a worker dies mid-claim — is code to get right and keep right, and a queue with a concurrency limit already does the job.",
     evidence: external,
+  };
+}
+
+/**
+ * A waitpoint an outside party may never complete needs a deadline.
+ *
+ * Parking on a token is the right answer, but the party on the other end can
+ * simply not turn up: an applicant abandons the payment page, a gateway drops
+ * the callback. Without a timeout that run waits forever, and because it is
+ * checkpointed rather than burning a slot, nothing surfaces it -- the work
+ * just quietly never finishes.
+ */
+function analyseWaitTimeout(facts: UsageFacts, requirements: Requirements): Check {
+  const id = "usage.wait_bounded";
+  const category = "durability";
+  const title = "Waiting on an outside party has a deadline";
+
+  if (!requirements.mustAwaitExternalCompletion) {
+    return {
+      id,
+      category,
+      title,
+      status: "na",
+      expected: "not required by this task",
+      actual: "not applicable",
+      why: "The task does not wait on anything outside the workflow.",
+      evidence: [],
+    };
+  }
+
+  // Absence of any waitpoint is the external-completion check's to report.
+  if (facts.waitTokenUsage.length === 0) {
+    return {
+      id,
+      category,
+      title,
+      status: "na",
+      expected: "a timeout on the waitpoint",
+      actual: "no waitpoint to bound",
+      why: "Nothing parks on an external event, which the external-completion check already reports.",
+      evidence: [],
+    };
+  }
+
+  // One deadline is enough: a token created with a timeout is already bounded
+  // wherever it is later awaited.
+  const bounded = facts.waitTokenTimeouts.length > 0;
+
+  return {
+    id,
+    category,
+    title,
+    status: bounded ? "pass" : "fail",
+    mechanism: bounded ? "platform" : "absent",
+    expected: "a timeout on the waitpoint",
+    actual: bounded
+      ? `${facts.waitTokenTimeouts.length} bounded waitpoint(s)`
+      : `${facts.waitTokenUsage.length} waitpoint(s), none bounded`,
+    why: bounded
+      ? "The waitpoint carries a timeout, so a party that never responds ends the wait with a failure the workflow can act on instead of leaving the run parked indefinitely."
+      : "The run parks on an external event with no deadline, so if the other side never completes the token the run waits forever. A checkpointed run holds no worker, which is exactly why this hides: nothing is slow and nothing errors, the work simply never finishes and no one is told. A timeout turns a no-show into an outcome the workflow can handle.",
+    evidence: bounded ? facts.waitTokenTimeouts : facts.waitTokenUsage,
   };
 }
 
@@ -842,6 +915,7 @@ export function analyseUsage(facts: UsageFacts, requirements: Requirements): Che
     }),
 
     analyseExternalCompletion(facts, requirements),
+    analyseWaitTimeout(facts, requirements),
 
     presenceCheck({
       id: "usage.output_streamed",
