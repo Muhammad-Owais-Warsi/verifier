@@ -1,0 +1,350 @@
+{
+  "generatedAt": "2026-09-21T10:35:55.070Z",
+  "submission": "/home/owais/projects/trigger-bench-v2/trigger-verify-test",
+  "score": {
+    "total": 0.846,
+    "passed": 11,
+    "failed": 2,
+    "na": 17,
+    "inconclusive": 0
+  },
+  "checks": [
+    {
+      "id": "static.type_checks",
+      "category": "static",
+      "title": "Compiles against the real Trigger.dev SDK types",
+      "status": "pass",
+      "expected": "no TypeScript errors against @trigger.dev/sdk",
+      "actual": "clean",
+      "why": "The submission type-checks against the real SDK, so the primitives are being called with valid shapes.",
+      "evidence": []
+    },
+    {
+      "id": "static.no_deprecated_apis",
+      "category": "static",
+      "title": "No deprecated Trigger.dev SDK symbols",
+      "status": "pass",
+      "expected": "no @trigger.dev symbols marked @deprecated by the installed SDK",
+      "actual": "none",
+      "why": "Nothing the installed Trigger.dev SDK marks as deprecated is used.",
+      "evidence": []
+    },
+    {
+      "id": "static.no_v3_apis",
+      "category": "static",
+      "title": "No v3-era Trigger.dev APIs",
+      "status": "fail",
+      "expected": "no client.defineJob, io.runTask, or @trigger.dev/sdk/v3 imports",
+      "actual": "2 legacy usage(s)",
+      "why": "The submission uses APIs from Trigger.dev v2/v3 that no longer exist in v4.",
+      "evidence": [
+        {
+          "file": "trigger.config.ts",
+          "line": 1,
+          "snippet": "@trigger.dev/sdk/v3 import path: import { defineConfig } from \"@trigger.dev/sdk/v3\";"
+        },
+        {
+          "file": "src/trigger/image-workflow.ts",
+          "line": 1,
+          "snippet": "@trigger.dev/sdk/v3 import path: import { logger, task } from \"@trigger.dev/sdk/v3\";"
+        }
+      ]
+    },
+    {
+      "id": "static.tasks_exported",
+      "category": "static",
+      "title": "Tasks are exported so the platform can register them",
+      "status": "pass",
+      "expected": "every task(...) definition is exported",
+      "actual": "2 task(s), all exported",
+      "why": "All tasks are exported, which is what makes them discoverable by the worker.",
+      "evidence": []
+    },
+    {
+      "id": "static.no_direct_run_calls",
+      "category": "static",
+      "title": "Tasks are not invoked by calling run() directly",
+      "status": "pass",
+      "expected": "tasks invoked through trigger/batchTrigger, never task.run()",
+      "actual": "none",
+      "why": "No task body is called directly, so invocations go through the platform.",
+      "evidence": []
+    },
+    {
+      "id": "usage.work_split_into_tasks",
+      "category": "decomposition",
+      "title": "Per-item work runs as its own task",
+      "status": "pass",
+      "mechanism": "platform",
+      "expected": "a task per unit of work, dispatched by an orchestrator",
+      "actual": "orchestrator \"process-image\" dispatches \"transform-image\"",
+      "why": "Per-item work is dispatched to its own task, so each item becomes a run the platform can schedule, retry and observe independently.",
+      "evidence": [
+        {
+          "file": "src/trigger/image-workflow.ts",
+          "line": 82,
+          "snippet": "transformImage = task({"
+        }
+      ]
+    },
+    {
+      "id": "usage.no_external_orchestrator",
+      "category": "decomposition",
+      "title": "No second queue or scheduler beside the platform",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not ask for work to be queued or scheduled.",
+      "evidence": []
+    },
+    {
+      "id": "usage.fan_out_batched",
+      "category": "fan-out",
+      "title": "Fan-out uses a batch trigger",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not require items to be dispatched together.",
+      "evidence": []
+    },
+    {
+      "id": "usage.concurrency_via_queue",
+      "category": "concurrency",
+      "title": "Concurrency limited by a Trigger.dev queue",
+      "status": "na",
+      "expected": "no concurrency requirement declared",
+      "actual": "not applicable",
+      "why": "The task does not state a concurrency requirement.",
+      "evidence": []
+    },
+    {
+      "id": "usage.retries_via_engine",
+      "category": "retries",
+      "title": "Retries handled by the platform retry engine",
+      "status": "na",
+      "expected": "no retry requirement declared",
+      "actual": "not applicable",
+      "why": "The task does not require recovery from transient failures.",
+      "evidence": []
+    },
+    {
+      "id": "usage.waits_for_children",
+      "category": "fan-in",
+      "title": "Orchestrator waits for every child to finish",
+      "status": "pass",
+      "mechanism": "platform",
+      "expected": "every dispatch uses an *AndWait variant",
+      "actual": "2/2 dispatches wait",
+      "why": "The orchestrator suspends at a waitpoint until every child run is terminal, which also releases its concurrency slot while it waits.",
+      "evidence": []
+    },
+    {
+      "id": "usage.per_item_outcome",
+      "category": "aggregation",
+      "title": "Per-item success and failure read from the run results",
+      "status": "pass",
+      "mechanism": "platform",
+      "expected": "waits for the runs and branches on each run's ok flag",
+      "actual": "waits for results; reads .ok",
+      "why": "The orchestrator waits for the child runs and branches on each run's ok flag, so a failed item is reported as failed instead of silently dropped.",
+      "evidence": [
+        {
+          "file": "src/trigger/image-workflow.ts",
+          "line": 182,
+          "snippet": "processImage = task({"
+        }
+      ]
+    },
+    {
+      "id": "usage.failure_isolated",
+      "category": "resilience",
+      "title": "One failing item does not abort the others",
+      "status": "pass",
+      "mechanism": "platform",
+      "expected": "branch on each run's ok flag",
+      "actual": "reads the ok flag on each run result",
+      "why": "Each run's outcome is inspected individually, so a failed item is recorded as failed while the rest continue.",
+      "evidence": [
+        {
+          "file": "src/trigger/image-workflow.ts",
+          "line": 182,
+          "snippet": "processImage = task({"
+        }
+      ]
+    },
+    {
+      "id": "usage.runs_isolated",
+      "category": "isolation",
+      "title": "Concurrent runs do not share in-process state",
+      "status": "pass",
+      "mechanism": "platform",
+      "expected": "no task body writing to module-scope state",
+      "actual": "state is confined to run payloads and metadata",
+      "why": "No task writes to module-scope state, so two runs of the same workflow cannot read or overwrite each other's data.",
+      "evidence": []
+    },
+    {
+      "id": "usage.durable_waits",
+      "category": "durability",
+      "title": "Waiting checkpoints instead of blocking the process",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not require durability across interruption.",
+      "evidence": []
+    },
+    {
+      "id": "usage.progress_observable",
+      "category": "observability",
+      "title": "Progress is published through the platform",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not require observable progress.",
+      "evidence": []
+    },
+    {
+      "id": "usage.cancellable",
+      "category": "lifecycle",
+      "title": "Cancellation is handled",
+      "status": "fail",
+      "mechanism": "absent",
+      "expected": "an onCancel hook or the run's abort signal",
+      "actual": "no cancellation handling",
+      "why": "Nothing handles cancellation. Without an onCancel hook or the run's abort signal, cancelling the parent leaves child work running and any external calls in flight.",
+      "evidence": []
+    },
+    {
+      "id": "usage.external_completion",
+      "category": "durability",
+      "title": "Waits for an external party without polling",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task never waits on anything outside the workflow.",
+      "evidence": []
+    },
+    {
+      "id": "usage.wait_bounded",
+      "category": "durability",
+      "title": "Waiting on an outside party has a deadline",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not wait on anything outside the workflow.",
+      "evidence": []
+    },
+    {
+      "id": "usage.output_streamed",
+      "category": "observability",
+      "title": "Partial output is streamed as it is produced",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not require incremental output.",
+      "evidence": []
+    },
+    {
+      "id": "usage.memory_provisioned",
+      "category": "resources",
+      "title": "Memory-hungry work is provisioned and recovers",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task has no memory-bound work.",
+      "evidence": []
+    },
+    {
+      "id": "usage.schedules_per_tenant",
+      "category": "scheduling",
+      "title": "Schedules are registered per tenant at runtime",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not require per-tenant schedules.",
+      "evidence": []
+    },
+    {
+      "id": "usage.work_prioritised",
+      "category": "concurrency",
+      "title": "Higher-priority work is served first",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not rank classes of work.",
+      "evidence": []
+    },
+    {
+      "id": "usage.tenant_throughput_isolated",
+      "category": "isolation",
+      "title": "One tenant's volume does not delay another's",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task is not multi-tenant.",
+      "evidence": []
+    },
+    {
+      "id": "usage.replay_safe",
+      "category": "idempotency",
+      "title": "Replaying the parent does not duplicate work",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not require replay safety.",
+      "evidence": []
+    },
+    {
+      "id": "limits.batch_size",
+      "category": "fan-out",
+      "title": "Fan-out is split to fit the batch size cap",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task fans out an unstated number of items, which fits in a single batch of 1000.",
+      "evidence": []
+    },
+    {
+      "id": "limits.payload_size",
+      "category": "fan-out",
+      "title": "Large content is passed by reference, not in the payload",
+      "status": "pass",
+      "mechanism": "platform",
+      "expected": "a key or id in the payload, with the child fetching the content",
+      "actual": "payloads carry identifiers rather than content",
+      "why": "Payloads carry references rather than content, so they stay small regardless of how large the underlying items are and never approach the 3MB trigger cap.",
+      "evidence": []
+    },
+    {
+      "id": "limits.metadata_size",
+      "category": "observability",
+      "title": "Progress reporting stays inside the metadata size cap",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not require progress to accumulate per item.",
+      "evidence": []
+    },
+    {
+      "id": "limits.output_size",
+      "category": "aggregation",
+      "title": "Aggregated results stay inside the output size cap",
+      "status": "pass",
+      "mechanism": "platform",
+      "expected": "the parent returns a summary, not every child's output",
+      "actual": "child outputs are reduced before being returned",
+      "why": "The parent reduces the child results to the fields it needs, so its return value stays a summary and cannot grow past the 10MB output cap as items are added.",
+      "evidence": []
+    },
+    {
+      "id": "limits.idempotency_scope",
+      "category": "idempotency",
+      "title": "Idempotency keys are scoped to survive a replay",
+      "status": "na",
+      "expected": "not required by this task",
+      "actual": "not applicable",
+      "why": "The task does not require replay safety.",
+      "evidence": []
+    }
+  ]
+}

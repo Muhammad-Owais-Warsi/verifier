@@ -1,0 +1,32 @@
+{
+    "$comment": "Requirements for the image processing task. Verifier-owned: the model never sees this file. Never name a Trigger.dev function, import, or primitive here -- the checks infer which primitive was used. Omit a key (or set it false) and its check reports n/a and drops out of the score, so only state what the task actually asks for.",
+    "$mapping": {
+        "mustWaitForAllTerminal": "'Some outputs depend on others' -- a dependent transformation cannot start until the one it needs has finished, so the workflow has to wait on child completion rather than dispatch and move on. The same line is also the only way to know every output is done",
+        "mustReportPerItemOutcome": "same line. A dependency is only satisfied if the prerequisite *succeeded*, so each child's result has to be read individually. Dispatching the dependent step because the previous one merely returned is the failure this catches",
+        "failureMustBeIsolated": "'independent transformations should happen concurrently' -- independent is the operative word. If one format failing discards the ones still in flight, they were never independent, which is what running them under a single all-or-nothing combinator does",
+        "mustSupportCancellation": "'Users should be able to cancel processing for one image' -- stated outright, and the only task so far that asks for it. Cancelling has to reach the work actually running, not just mark a row",
+        "mustIsolateConcurrentRuns": "same line: 'for one image' distinguishes it from all images, so several are in flight at once and each has its own lifecycle. Per-image bookkeeping held in process memory is shared by every image on that worker and lost on restart",
+        "itemPayloadIsLarge": "the inputs are uploaded image files and the outputs are binary artifacts. 'Some outputs depend on others' means one step's output is another step's input, which is exactly where image bytes get carried inline instead of by reference"
+    },
+    "$inferred": "Deliberately NOT set, because the brief never says it. concurrencyMustBeManaged is left off on purpose: the brief asks for independent work to run concurrently, and says nothing about capping it, so requiring a bound would mark the model down for the opposite of what it was told. progressMustBeObservable has no basis -- unlike the video brief, this one never mentions status or states. mustDispatchItemsTogether is off because the output set is small, heterogeneous and partly ordered, so dispatching the independent ones individually is a fair reading. transientFailuresMustRecover, mustProvisionForMemory and mustSurviveInterruption would all be reasonable engineering, but nothing in the text asks for them. mustNotDuplicateOnReplay, mustAwaitExternalCompletion, outputMustStreamIncrementally, schedulesMustBePerTenant, mustPrioritiseWork and mustIsolateTenantThroughput have no basis at all.",
+    "requirements": {
+        "mustWaitForAllTerminal": true,
+        "mustReportPerItemOutcome": true,
+        "failureMustBeIsolated": true,
+        "mustSupportCancellation": true,
+        "mustIsolateConcurrentRuns": true,
+        "itemPayloadIsLarge": true,
+        "concurrencyMustBeManaged": false,
+        "mustDispatchItemsTogether": false,
+        "transientFailuresMustRecover": false,
+        "progressMustBeObservable": false,
+        "mustSurviveInterruption": false,
+        "mustNotDuplicateOnReplay": false,
+        "mustAwaitExternalCompletion": false,
+        "outputMustStreamIncrementally": false,
+        "mustProvisionForMemory": false,
+        "schedulesMustBePerTenant": false,
+        "mustPrioritiseWork": false,
+        "mustIsolateTenantThroughput": false
+    }
+}

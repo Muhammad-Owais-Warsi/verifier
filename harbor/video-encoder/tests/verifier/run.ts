@@ -229,10 +229,16 @@ if (invokedDirectly) {
         console.log(`[${check.status.toUpperCase().padEnd(12)}] ${check.title}`);
         if (check.status === "fail") {
           console.log(`               ${check.why}`);
-          for (const item of check.evidence.slice(0, 2)) {
-            if (item.file) {
-              console.log(`               -> ${item.file}:${item.line} ${item.snippet ?? ""}`);
-            }
+          const located = check.evidence.filter((item) => item.file);
+          for (const item of located.slice(0, 2)) {
+            console.log(`               -> ${item.file}:${item.line} ${item.snippet ?? ""}`);
+          }
+          // Say so when there is more. Printing two of ten silently made a
+          // widespread problem look like an isolated one.
+          if (located.length > 2) {
+            console.log(
+              `               -> ... and ${located.length - 2} more (see results/report.json)`,
+            );
           }
         }
       }

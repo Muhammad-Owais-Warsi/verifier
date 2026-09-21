@@ -1,0 +1,1 @@
+Build a workflow using trigger.dev that takes uploaded images and generates thumbnails, optimized versions, and several formats. Some outputs depend on others, while independent transformations should happen concurrently. Users should be able to cancel processing for one image.

@@ -359,6 +359,28 @@ const FIXTURES: Record<string, FixtureExpectation> = {
       "limits.idempotency_scope": "fail",
     },
   },
+  "helper-unwrap": {
+    note: "Reads each run's ok flag through a helper declared beside the task.",
+    requirements: DURABLE_REQUIREMENTS,
+    checks: {
+      "static.type_checks": "pass",
+      // The bug: `.ok` read outside the task body counted as never read.
+      "usage.per_item_outcome": "pass",
+      "usage.failure_isolated": "pass",
+    },
+  },
+  "own-idempotency": {
+    note: "No dispatch key, but the submission's own APIs take one by that name.",
+    requirements: DURABLE_REQUIREMENTS,
+    checks: {
+      "static.type_checks": "pass",
+      // Reported here, and only here.
+      "usage.replay_safe": "fail",
+      // The bug: a store argument, a gateway argument and a waitpoint token
+      // key were all graded as run-scoped dispatch keys.
+      "limits.idempotency_scope": "na",
+    },
+  },
   "v3-reflexes": {
     note: "Correct structure, expressed with the APIs the SDK renamed.",
     requirements: ADVANCED_REQUIREMENTS,

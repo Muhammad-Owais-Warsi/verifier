@@ -1,17 +1,26 @@
 #!/bin/bash
-# Copies the verifier, the video-transcode expectations and the two brief files
-# into the Harbor task, byte for byte. The originals stay the source of truth.
+# Copies the verifier, a task's expectations and the two brief files into each
+# Harbor task, byte for byte. The originals stay the source of truth.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-task="$repo/harbor/video-encoder"
 
-rm -rf "$task/tests/verifier" "$task/tests/tasks"
-mkdir -p "$task/tests/tasks/video-transcode"
+# sync <task name under tasks/> <folder under harbor/>
+sync() {
+  local name="$1"
+  local task="$repo/harbor/$2"
 
-cp -r "$repo/verifier" "$task/tests/verifier"
-cp "$repo/tasks/video-transcode/expectations.json" "$task/tests/tasks/video-transcode/expectations.json"
-cp "$repo/tasks/video-transcode/TASK.md" "$task/environment/TASK.md"
-cp "$repo/tasks/setup.md" "$task/environment/setup.md"
+  rm -rf "$task/tests/verifier" "$task/tests/tasks"
+  mkdir -p "$task/tests/tasks/$name"
 
-echo "synced -> harbor/video-encoder"
+  cp -r "$repo/verifier" "$task/tests/verifier"
+  cp "$repo/tasks/$name/expectations.json" "$task/tests/tasks/$name/expectations.json"
+  cp "$repo/tasks/$name/TASK.md" "$task/environment/TASK.md"
+  cp "$repo/tasks/setup.md" "$task/environment/setup.md"
+
+  echo "synced -> harbor/$2"
+}
+
+sync video-transcode video-encoder
+sync driving-license driving-license
+sync image-process image-process

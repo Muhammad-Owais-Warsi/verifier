@@ -1,0 +1,34 @@
+{
+    "$comment": "Requirements for the driving licence portal task. Verifier-owned: the model never sees this file. Never name a Trigger.dev function, import, or primitive here -- the checks infer which primitive was used. Omit a key (or set it false) and its check reports n/a and drops out of the score, so only state what the task actually asks for.",
+    "$mapping": {
+        "concurrencyMustBeManaged": "'make sure no user consume all server capacity' -- capacity has to be bounded by the platform rather than by the application",
+        "mustIsolateTenantThroughput": "same line, and the word is 'user'. A single global cap still lets whoever submits first hold every slot, so keeping one applicant from starving the rest needs the limit partitioned per user",
+        "transientFailuresMustRecover": "'Email and sms should be managed properly' plus 'payment edge cases' -- this backend's work is almost entirely calls to third parties (SMS gateway, mail provider, payment gateway), where timeouts and 5xx are routine rather than exceptional",
+        "mustNotDuplicateOnReplay": "same two phrases. Re-running a step must not send the same OTP twice or take a second payment, which is the failure a citizen actually notices",
+        "mustAwaitExternalCompletion": "'payment edge cases' -- a gateway confirms out of band and can take minutes, so the application has to park until it is told the outcome. Polling the gateway in a loop, or holding the run open waiting, are the two wrong answers this is looking for",
+        "mustSurviveInterruption": "same phrase. A payment pending across a deploy or a worker restart must not lose the application behind it",
+        "mustIsolateConcurrentRuns": "'proper syncing' -- an applicant and an RTO acting on the same application at the same time must not corrupt its state",
+        "progressMustBeObservable": "'Proper updates' -- the applicant has to be able to see where the application has got to while it is still in flight, not only once it finishes"
+    },
+    "$inferred": "Deliberately NOT set, because the brief never says it. The fan-out keys (mustDispatchItemsTogether, mustWaitForAllTerminal, mustReportPerItemOutcome, failureMustBeIsolated) are off because this is described as a request-driven portal, not a batch over a collection; turn them on only if the text is sharpened to ask for something like notifying every applicant with a test tomorrow. mustPrioritiseWork is the most tempting omission -- an OTP should not queue behind bulk reminders -- but 'managed properly' does not say it. 'The scale will be the same' implies volume but names no number, so itemCount stays off and the batch-size cap check stays n/a; concurrency is carried by concurrencyMustBeManaged instead. itemPayloadIsLarge is off because no document upload is mentioned, which leaves the payload and output size checks n/a. schedulesMustBePerTenant, mustSupportCancellation, outputMustStreamIncrementally and mustProvisionForMemory have no basis in the text at all.",
+    "requirements": {
+        "concurrencyMustBeManaged": true,
+        "mustIsolateTenantThroughput": true,
+        "transientFailuresMustRecover": true,
+        "mustNotDuplicateOnReplay": true,
+        "mustAwaitExternalCompletion": true,
+        "mustSurviveInterruption": true,
+        "mustIsolateConcurrentRuns": true,
+        "progressMustBeObservable": true,
+        "mustDispatchItemsTogether": false,
+        "mustWaitForAllTerminal": false,
+        "mustReportPerItemOutcome": false,
+        "failureMustBeIsolated": false,
+        "mustPrioritiseWork": false,
+        "mustSupportCancellation": false,
+        "schedulesMustBePerTenant": false,
+        "outputMustStreamIncrementally": false,
+        "mustProvisionForMemory": false,
+        "itemPayloadIsLarge": false
+    }
+}

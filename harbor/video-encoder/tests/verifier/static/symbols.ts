@@ -9,6 +9,12 @@
  */
 import { Node, type Project, type Symbol as TsSymbol, type Type } from "ts-morph";
 
+/**
+ * SDK exports that define a task. Lives here rather than in facts.ts because
+ * the resolver needs it to know where a task body begins.
+ */
+export const TASK_FACTORY_NAMES: ReadonlySet<string> = new Set(["task", "schemaTask"]);
+
 /** Matches declaration paths inside any @trigger.dev package. */
 const TRIGGER_PACKAGE = /[\\/]@trigger\.dev[\\/]/;
 
@@ -127,18 +133,33 @@ export function createTriggerResolver(project: Project): TriggerResolver {
     isTriggerTyped,
 
     isInsideTriggerCall(node) {
-      return Boolean(
-        node.getFirstAncestor((ancestor) => {
-          if (!Node.isCallExpression(ancestor)) return false;
-          if (!ancestor.getArguments().some((argument) => argument.containsRange(node.getPos(), node.getEnd()))) {
-            return false;
-          }
-          return (
-            resolver.isTriggerCall(ancestor, undefined) ||
-            resolver.isTriggerMember(ancestor.getExpression())
-          );
-        }),
-      );
+      // The walk stops at the task factory. Without that boundary every node
+      // in a task body was "inside an SDK call", because `task({ run })` is
+      // itself one -- so a submission's own `store.create({ idempotencyKey })`
+      // resolved as if it were a trigger option.
+      let found = false;
+
+      node.getFirstAncestor((ancestor) => {
+        if (!Node.isCallExpression(ancestor)) return false;
+        if (resolver.isTriggerFactoryCall(ancestor, TASK_FACTORY_NAMES)) return true;
+
+        const wrapsNode = ancestor
+          .getArguments()
+          .some((argument) => argument.containsRange(node.getPos(), node.getEnd()));
+        if (!wrapsNode) return false;
+
+        if (
+          resolver.isTriggerCall(ancestor, undefined) ||
+          resolver.isTriggerMember(ancestor.getExpression())
+        ) {
+          found = true;
+          return true;
+        }
+
+        return false;
+      });
+
+      return found;
     },
 
     isTriggerCall(call, names) {

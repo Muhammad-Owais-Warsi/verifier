@@ -1,8 +1,8 @@
-import { Node, Project, SyntaxKind, ts } from "ts-morph";
+import { type CallExpression, Node, Project, SyntaxKind, ts } from "ts-morph";
 import fs from "node:fs";
 import path from "node:path";
 import type { Evidence } from "../types.js";
-import { createTriggerResolver, type TriggerResolver } from "./symbols.js";
+import { createTriggerResolver, TASK_FACTORY_NAMES, type TriggerResolver } from "./symbols.js";
 
 /**
  * Extracts structured facts about how a submission uses Trigger.dev.
@@ -40,8 +40,8 @@ export const BATCH_METHODS = new Set([
  */
 const BATCH_NAMESPACE_METHODS = new Set(["trigger", "triggerAndWait"]);
 
-/** SDK exports that define a task. */
-export const TASK_FACTORIES = new Set(["task", "schemaTask"]);
+/** SDK exports that define a task. Defined with the resolver, re-exported here. */
+export const TASK_FACTORIES = TASK_FACTORY_NAMES;
 
 const METADATA_METHODS = /^(set|increment|decrement|append|remove|del|stream|flush|replace|save)$/;
 const REALTIME_METHODS = /^(subscribeToRun|subscribeToRunsWithTag|subscribeToBatch|fetchStream|poll)$/;
@@ -289,6 +289,73 @@ function numericValue(node: Node | undefined): number | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * True when the nearest call around this node is the submission's own code.
+ *
+ * Options assembled into a standalone const have no enclosing call and stay
+ * eligible, which is what the name-only fallback exists for.
+ */
+/**
+ * The submission's own functions called from this node, one level deep.
+ *
+ * Only declarations inside the submission are followed, so this never walks
+ * into the SDK or a dependency.
+ */
+function localHelpersCalledBy(node: Node): Node[] {
+  const helpers: Node[] = [];
+  const seen = new Set<string>();
+
+  for (const call of node.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const callee = call.getExpression();
+    if (!Node.isIdentifier(callee)) continue;
+
+    for (const definition of callee.getDefinitionNodes()) {
+      const file = definition.getSourceFile();
+      if (file.getFilePath().includes("node_modules")) continue;
+      if (definition === node || node.containsRange(definition.getPos(), definition.getEnd())) {
+        continue;
+      }
+
+      const key = `${file.getFilePath()}:${definition.getPos()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      helpers.push(definition);
+    }
+  }
+
+  return helpers;
+}
+
+/** `{ payload, options: { idempotencyKey } }` -- the batch item shape. */
+function underOptionsProperty(node: Node): boolean {
+  const literal = node.getParent();
+  if (!Node.isObjectLiteralExpression(literal)) return false;
+
+  const owner = literal.getParent();
+  return Node.isPropertyAssignment(owner) && owner.getName() === "options";
+}
+
+/**
+ * True when the key is handed straight to one of the submission's own
+ * functions, which means it is that function's parameter rather than a
+ * dispatch option.
+ *
+ * Options hoisted into a variable, or built inside a callback, are not
+ * consumed here and stay eligible.
+ */
+function consumedByUserlandCall(node: Node, resolver: TriggerResolver): boolean {
+  const call: CallExpression | undefined = node.getFirstAncestorByKind(SyntaxKind.CallExpression);
+  if (!call) return false;
+
+  const argument = call
+    .getArguments()
+    .find((candidate) => candidate.containsRange(node.getPos(), node.getEnd()));
+  if (!argument) return false;
+  if (Node.isArrowFunction(argument) || Node.isFunctionExpression(argument)) return false;
+
+  return !resolver.isTriggerMember(call.getExpression()) && !resolver.isTriggerCall(call, undefined);
 }
 
 /** SQL that exists to hand work out, not to record it. */
@@ -1273,11 +1340,27 @@ function collectAncillaryFacts(project: Project, rootDir: string, resolver: Trig
     for (const property of sourceFile.getDescendantsOfKind(SyntaxKind.PropertyAssignment)) {
       const inTaskBody = isInsideTaskBody(property, resolver);
 
+      // The name-only fallback is scoped to SDK calls. `idempotencyKey` is
+      // not SDK vocabulary at all -- it is the standard field for payment
+      // gateways, HTTP clients and dedupe tables -- so a submission passing
+      // one to its own store had its own API read as a trigger option.
       const optionKey = (name: string) =>
         resolver.isTriggerProperty(property, name) ||
-        (inTaskBody && property.getName() === name);
+        (inTaskBody &&
+          property.getName() === name &&
+          (underOptionsProperty(property) || !consumedByUserlandCall(property, resolver)));
 
       if (optionKey("idempotencyKey")) {
+        // A key on a waitpoint token is a different thing from a key on a
+        // dispatch. It is deliberately run-scoped, so that a retried attempt
+        // rejoins the token this run already created rather than orphaning
+        // it, and it dedupes no child work at all.
+        const onWaitToken = (() => {
+          const call = property.getFirstAncestorByKind(SyntaxKind.CallExpression);
+          return call ? resolver.isTriggerMember(call.getExpression(), WAIT_TOKEN_METHODS) : false;
+        })();
+        if (onWaitToken) continue;
+
         idempotencyKeyUsage.push(evidenceFor(property, rootDir));
 
         // A raw string is hashed with the parent run id, so it dedupes across
@@ -1553,8 +1636,11 @@ export function extractFacts(outputDir: string, project = createProject(outputDi
     // like `Array.isArray(batch) ? batch : batch.runs` widens the type and
     // loses that declaration, so fall back to any `.ok` read inside a task that
     // actually dispatches: still far tighter than matching `.ok` anywhere.
-    const okAccesses = node
-      .getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)
+    // Checking the flag in a helper is the same as checking it inline, and
+    // routinely how it is written: one `unwrap(result, label)` beside the
+    // task, called per run. Reading only the task body missed that entirely.
+    const okAccesses = [node, ...localHelpersCalledBy(node)]
+      .flatMap((scope) => scope.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression))
       .filter((access) => access.getName() === "ok");
 
     fact.readsRunOk =
