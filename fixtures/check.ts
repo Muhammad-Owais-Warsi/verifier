@@ -184,6 +184,8 @@ const FIXTURES: Record<string, FixtureExpectation> = {
     note: "Satisfies the advanced requirements with the platform primitives.",
     requirements: ADVANCED_REQUIREMENTS,
     checks: {
+      // Its token carries timeout: "3d".
+      "usage.wait_bounded": "pass",
       "static.type_checks": "pass",
       "usage.external_completion": "pass",
       "usage.output_streamed": "pass",
@@ -282,6 +284,33 @@ const FIXTURES: Record<string, FixtureExpectation> = {
       "usage.replay_safe": "pass",
     },
   },
+  "sql-scheduler": {
+    note: "Job queue built in Postgres: advisory lock, skip locked, claim loop.",
+    requirements: DURABLE_REQUIREMENTS,
+    checks: {
+      "static.type_checks": "pass",
+      // Nothing is imported, so the import-only check used to pass this.
+      "usage.no_external_orchestrator": "fail",
+    },
+  },
+  "sql-state": {
+    note: "Ordinary domain state in SQL. The scheduler check must not fire.",
+    requirements: DURABLE_REQUIREMENTS,
+    checks: {
+      "static.type_checks": "pass",
+      "usage.no_external_orchestrator": "pass",
+    },
+  },
+  "untimed-wait": {
+    note: "Parks on a waitpoint correctly, but with no deadline.",
+    requirements: ADVANCED_REQUIREMENTS,
+    checks: {
+      "static.type_checks": "pass",
+      // The waitpoint itself is right, so this must still pass.
+      "usage.external_completion": "pass",
+      "usage.wait_bounded": "fail",
+    },
+  },
   "batch-namespace": {
     note: "Mixed fan-out via the batch namespace, env-configured queue limit.",
     requirements: DURABLE_REQUIREMENTS,
@@ -299,6 +328,7 @@ const FIXTURES: Record<string, FixtureExpectation> = {
       "usage.durable_waits": "pass",
       "usage.replay_safe": "pass",
       "limits.idempotency_scope": "pass",
+      "usage.no_external_orchestrator": "pass",
     },
   },
   "shorthand-config": {

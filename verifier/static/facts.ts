@@ -186,6 +186,8 @@ export interface UsageFacts {
   handRolledLimiters: Evidence[];
   /** Second job queues or schedulers bolted on beside the platform. */
   externalOrchestrators: Evidence[];
+  /** A job queue hand-built in SQL: claim loops, advisory locks. */
+  databaseSchedulers: Evidence[];
   /** Every task that dispatches another, in pipeline order. */
   dispatchers: TaskFact[];
   /**
@@ -222,6 +224,8 @@ export interface UsageFacts {
 
   /** Waitpoint tokens: a run parked until something outside completes it. */
   waitTokenUsage: Evidence[];
+  /** Token waits that bound how long they will park. */
+  waitTokenTimeouts: Evidence[];
   /** streams.pipe / streams.read, i.e. output streamed as it is produced. */
   streamUsage: Evidence[];
   /** A machine preset declared on a task, i.e. provisioned resources. */
@@ -285,6 +289,56 @@ function numericValue(node: Node | undefined): number | undefined {
   }
 
   return undefined;
+}
+
+/** SQL that exists to hand work out, not to record it. */
+const CLAIM_SQL = /\bskip\s+locked\b|\bpg_advisory(_xact)?_lock\b/i;
+/** Moving a row out of a pending state, i.e. taking ownership of it. */
+const CLAIM_TRANSITION = /\bupdate\b[\s\S]*\bset\b[\s\S]*\bstatus\s*=/i;
+const CLAIM_PREDICATE = /\bwhere\b[\s\S]*\bstatus\b\s*(=|in\b)/i;
+/** Counting what is already running, i.e. enforcing a cap by hand. */
+const INFLIGHT_COUNT = /\bcount\s*\(/i;
+
+/**
+ * Finds a job queue built inside the database.
+ *
+ * The external-orchestrator check looked only at imports, so it caught BullMQ
+ * and missed the far more common answer: a table with a status column, a claim
+ * loop and an advisory lock. That is the same second scheduler, written out
+ * longhand, and it was scoring as a pass.
+ *
+ * Storing application state in SQL is ordinary and must not be flagged, so the
+ * signal has to be work *claiming* rather than a status column. `SKIP LOCKED`
+ * and advisory locks exist almost solely to hand rows to competing workers; a
+ * status transition that both reads and writes the status, next to a count of
+ * what is in flight, is the same thing spelled out.
+ */
+function findDatabaseSchedulers(scope: Node, rootDir: string): Evidence[] {
+  const found: Evidence[] = [];
+
+  const literals = [
+    ...scope.getDescendantsOfKind(SyntaxKind.StringLiteral),
+    ...scope.getDescendantsOfKind(SyntaxKind.NoSubstitutionTemplateLiteral),
+    ...scope.getDescendantsOfKind(SyntaxKind.TemplateExpression),
+  ];
+
+  for (const literal of literals) {
+    const sql = literal.getText();
+
+    const claims = CLAIM_SQL.test(sql);
+    const transitions =
+      CLAIM_TRANSITION.test(sql) && CLAIM_PREDICATE.test(sql) && INFLIGHT_COUNT.test(sql);
+    if (!claims && !transitions) continue;
+
+    found.push({
+      ...evidenceFor(literal, rootDir),
+      snippet: claims
+        ? "SQL claims work for a worker (skip locked / advisory lock)"
+        : "SQL moves rows out of a pending state to hand them out",
+    });
+  }
+
+  return found;
 }
 
 /**
@@ -1082,6 +1136,7 @@ function collectAncillaryFacts(project: Project, rootDir: string, resolver: Trig
   const unsafeUnwraps: Evidence[] = [];
   const pollingSleeps: Evidence[] = [];
   const waitTokenUsage: Evidence[] = [];
+  const waitTokenTimeouts: Evidence[] = [];
   const streamUsage: Evidence[] = [];
   const machineUsage: Evidence[] = [];
   const outOfMemoryUsage: Evidence[] = [];
@@ -1145,6 +1200,10 @@ function collectAncillaryFacts(project: Project, rootDir: string, resolver: Trig
 
         if (resolver.isTriggerMember(expression, WAIT_TOKEN_METHODS)) {
           waitTokenUsage.push(evidenceFor(call, rootDir));
+
+          if (call.getArguments().some((argument) => hasProperty(argument, "timeout"))) {
+            waitTokenTimeouts.push(evidenceFor(call, rootDir));
+          }
         }
 
         // Matched by declaring module rather than receiver name, because
@@ -1391,6 +1450,7 @@ function collectAncillaryFacts(project: Project, rootDir: string, resolver: Trig
     unsafeUnwraps,
     pollingSleeps,
     waitTokenUsage,
+    waitTokenTimeouts,
     streamUsage,
     machineUsage,
     outOfMemoryUsage,
@@ -1542,6 +1602,7 @@ export function extractFacts(outputDir: string, project = createProject(outputDi
     queues,
     handRolledLimiters: findHandRolledLimiters(project, rootDir),
     externalOrchestrators: findExternalOrchestrators(project, rootDir),
+    databaseSchedulers: rawTasks.flatMap(({ node }) => findDatabaseSchedulers(node, rootDir)),
     dispatchers,
     orchestrator,
     workers: allFacts.filter((fact) => dispatched.has(fact.name)),

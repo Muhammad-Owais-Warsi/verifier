@@ -6,10 +6,8 @@ the result can be picked up automatically.
 Build the project in this directory:
 
 ```
-.
-├── package.json        
-├── tsconfig.json       # yours; the project must type-check
-├── trigger.config.ts   # defineConfig, with dirs pointing at ./src/trigger
+
+# defineConfig, with dirs pointing at ./src/trigger
 └── src/
     └── trigger/        # all task definitions live here, across as many files as you like
 ```
